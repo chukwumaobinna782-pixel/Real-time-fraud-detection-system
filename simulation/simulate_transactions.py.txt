@@ -1,0 +1,49 @@
+import time
+import requests
+from faker import Faker
+import numpy as np
+import pandas as pd
+
+fake = Faker()
+
+# Load original df for realistic sampling (optional; copy your creditcard.csv here)
+# df = pd.read_csv('path/to/creditcard.csv')  # Uncomment if you have it
+
+API_URL = "http://localhost:8000/predict"  # Change to deployed URL
+
+def generate_fake_transaction():
+    # Increment time for "real-time" feel
+    current_time = time.time() % (24 * 3600)  # Seconds in a day
+
+    # Realistic Amount: Log-normal dist like real transactions
+    amount = np.exp(np.random.normal(3, 1))  # Mean ~20, up to thousands
+
+    # V1-V28: Random normals (approximate PCA); for realism, sample from df
+    v_values = {f'V{i}': np.random.normal(0, 1) for i in range(1, 29)}  # Placeholder
+    # For better demo: v_values = df.sample(1).drop(['Time', 'Amount', 'Class'], axis=1).iloc[0].to_dict()
+
+    # Occasionally make "fraud-like" (e.g., extreme V values, high amount at night)
+    if np.random.rand() < 0.05:  # 5% fraud simulation
+        amount *= 10  # High amount
+        for i in [3, 10, 12, 14, 17]:  # Key features from your importances
+            v_values[f'V{i}'] *= -2  # Exaggerate for fraud
+
+    transaction = {
+        "Time": current_time,
+        **v_values,
+        "Amount": amount
+    }
+    return transaction
+
+while True:  # Infinite loop for automation
+    tx = generate_fake_transaction()
+    response = requests.post(API_URL, json=tx)
+    
+    if response.status_code == 200:
+        result = response.json()
+        print(f"Transaction: Amount=${tx['Amount']:.2f}, Time={tx['Time']:.0f}s")
+        print(f"Prediction: {result}")
+    else:
+        print(f"Error: {response.text}")
+    
+    time.sleep(np.random.uniform(1, 5))  # Simulate 1-5s between transactions

@@ -1,0 +1,90 @@
+import joblib
+import pandas as pd
+import numpy as np
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+from typing import Dict
+
+# Load model and scaler (assume they're in the same dir)
+model = joblib.load('xgboost_fraud_with_features.pkl')
+scaler = joblib.load('scaler_with_features.pkl')
+
+# Define input schema (matches your transaction_dict; V1-V28 are floats)
+class Transaction(BaseModel):
+    Time: float = Field(..., description="Transaction time in seconds")
+    V1: float
+    V2: float
+    V3: float
+    V4: float
+    V5: float
+    V6: float
+    V7: float
+    V8: float
+    V9: float
+    V10: float
+    V11: float
+    V12: float
+    V13: float
+    V14: float
+    V15: float
+    V16: float
+    V17: float
+    V18: float
+    V19: float
+    V20: float
+    V21: float
+    V22: float
+    V23: float
+    V24: float
+    V25: float
+    V26: float
+    V27: float
+    V28: float
+    Amount: float
+
+app = FastAPI(title="Real-Time Fraud Detection API")
+
+@app.post("/predict", response_model=Dict[str, str | float])
+def predict_fraud(transaction: Transaction):
+    try:
+        transaction_dict = transaction.dict()
+        
+        # Your feature engineering logic (copied from predict_fraud_live)
+        df_live = pd.DataFrame([transaction_dict])
+        df_live['Hour'] = (df_live['Time'] // 3600) % 24
+        df_live['Is_night'] = df_live['Hour'].isin([23, 0, 1, 2, 3, 4, 5]).astype(int)
+        df_live['Amount_log'] = np.log1p(df_live['Amount'])
+        df_live['Is_Zero_Amount'] = (df_live['Amount'] == 0).astype(int)
+
+        v_cols = [f'V{i}' for i in range(1, 29)]
+        df_live['V_sum'] = df_live[v_cols].sum(axis=1)
+        df_live['V_std'] = df_live[v_cols].std(axis=1)
+        df_live['V_max'] = df_live[v_cols].max(axis=1)
+        df_live['V_min'] = df_live[v_cols].min(axis=1)
+
+        df_live['V3_x_V10'] = df_live['V3'] * df_live['V10']
+        df_live['V3_x_V12'] = df_live['V3'] * df_live['V12']
+        df_live['V10_x_V12'] = df_live['V10'] * df_live['V12']
+        df_live['V11_x_V14'] = df_live['V11'] * df_live['V14']
+        df_live['V14_x_V17'] = df_live['V14'] * df_live['V17']
+
+        # Get feature columns from model (to match training)
+        expected_cols = model.get_booster().feature_names
+        for col in expected_cols:
+            if col not in df_live.columns:
+                df_live[col] = 0  # Default for missing engineered features
+
+        X_live = df_live[expected_cols]
+        X_scaled = scaler.transform(X_live)
+
+        prob = model.predict_proba(X_scaled)[0, 1]
+
+        return {
+            "fraud_probability": round(float(prob), 5),
+            "decision": "FRAUD - BLOCK" if prob > 0.5 else "APPROVED",
+            "action": "BLOCK" if prob > 0.8 else ("REVIEW" if prob > 0.3 else "APPROVE")
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
+
+# Run with: uvicorn main:app --reload (for dev)
